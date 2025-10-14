@@ -1,0 +1,169 @@
+#include <LiquidCrystal.h>
+#include <Keypad.h>
+// Definições de pinos
+LiquidCrystal lcd(A0, A1, A2, A3, A4, A5);
+const byte ROWS = 4;
+const byte COLS = 4;
+char keys[ROWS][COLS] = {
+  {'1','2','3','A'},
+  {'4','5','6','B'},
+  {'7','8','9','C'},
+  {'*','0','#','D'}
+};
+byte rowPins[ROWS] = {8, 7, 6, 5};
+byte colPins[COLS] = {4, 3, 2, 13};
+Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
+// Pinos dos sensores e atuadores
+const int sensor1Pin = 12;
+const int sensor2Pin = 11;
+const int sensor3Pin = 10;
+const int ledAmarelo = 9;
+const int ledVerde = 1;
+const int ledAzul = 0;
+const int ledBranco = 14;
+const int ledVermelho = 15;
+const int buzzerPin = 16;
+const int potenciometroPin = A3;
+// Estados do processo
+enum ProcessState {
+  IDLE,
+  WAITING_FOR_STAGE_1,
+  PROCESSING_STAGE_1,
+  WAITING_FOR_STAGE_2,
+  PROCESSING_STAGE_2,
+  WAITING_FOR_STAGE_3,
+  PROCESSING_STAGE_3,
+  FAULT,
+  EMERGENCY_STOP
+};
+ProcessState currentState = IDLE;
+unsigned long stateChangeTimestamp = 0;
+unsigned long processStartTimestamp = 0;
+unsigned long blinkTimestamp = 0;
+unsigned long transitionStartTimestamp = 0;
+int productsFinished = 0;
+const unsigned long TRANSITION_TIMEOUT = 5000;
+void setup() {
+  lcd.begin(20, 4);
+  Serial.begin(9600);
+  pinMode(sensor1Pin, INPUT);
+  pinMode(sensor2Pin, INPUT);
+  pinMode(sensor3Pin, INPUT);
+  pinMode(ledAmarelo, OUTPUT);
+  pinMode(ledVerde, OUTPUT);
+  pinMode(ledAzul, OUTPUT);
+  pinMode(ledBranco, OUTPUT);
+  pinMode(ledVermelho, OUTPUT);
+  pinMode(buzzerPin, OUTPUT);
+  changeState(IDLE);
+}
+void loop() {
+  checkKeypad();
+  switch (currentState) {
+    case IDLE:
+      break;
+    case WAITING_FOR_STAGE_1:
+      if (digitalRead(sensor1Pin)) {
+        changeState(PROCESSING_STAGE_1);
+        processStartTimestamp = millis();
+      } else if (millis() - transitionStartTimestamp > TRANSITION_TIMEOUT) {
+        changeState(FAULT);
+      }
+      break;
+    case PROCESSING_STAGE_1:
+      if (millis() - processStartTimestamp > getProcessTime()) {
+        changeState(WAITING_FOR_STAGE_2);
+        transitionStartTimestamp = millis();
+      } else {
+        blinkLed(ledVerde);
+      }
+      break;
+    case WAITING_FOR_STAGE_2:
+      if (digitalRead(sensor2Pin)) {
+        changeState(PROCESSING_STAGE_2);
+        processStartTimestamp = millis();
+      } else if (millis() - transitionStartTimestamp > TRANSITION_TIMEOUT) {
+        changeState(FAULT);
+      }
+      break;
+    case PROCESSING_STAGE_2:
+      if (millis() - processStartTimestamp > getProcessTime()) {
+        changeState(WAITING_FOR_STAGE_3);
+        transitionStartTimestamp = millis();
+      } else {
+        blinkLed(ledAzul);
+      }
+      break;
+    case WAITING_FOR_STAGE_3:
+      if (digitalRead(sensor3Pin)) {
+        changeState(PROCESSING_STAGE_3);
+        processStartTimestamp = millis();
+      } else if (millis() - transitionStartTimestamp > TRANSITION_TIMEOUT) {
+        changeState(FAULT);
+      }
+      break;
+    case PROCESSING_STAGE_3:
+      if (millis() - processStartTimestamp > getProcessTime()) {
+        productsFinished++;
+        changeState(WAITING_FOR_STAGE_1);
+        transitionStartTimestamp = millis();
+      } else {
+        blinkLed(ledBranco);
+      }
+      break;
+    case FAULT:
+      digitalWrite(ledVermelho, HIGH);
+      tone(buzzerPin, 1000);
+      break;
+    case EMERGENCY_STOP:
+      digitalWrite(ledVermelho, HIGH);
+      break;
+  }
+}
+void changeState(ProcessState newState) {
+  currentState = newState;
+  stateChangeTimestamp = millis();
+  updateLcd();
+  updateLeds();
+  logEvent("Mudança de estado");
+}
+void checkKeypad() {
+  char key = keypad.getKey();
+  if (key == '#') {
+    if (currentState == IDLE) changeState(WAITING_FOR_STAGE_1);
+  } else if (key != NO_KEY && currentState != FAULT) {
+    changeState(EMERGENCY_STOP);
+  }
+}
+unsigned long getProcessTime() {
+  int val = analogRead(potenciometroPin);
+  return map(val, 0, 1023, 5000, 1000);
+}
+void blinkLed(int pin) {
+  if (millis() - blinkTimestamp > 500) {
+    blinkTimestamp = millis();
+    digitalWrite(pin, !digitalRead(pin));
+  }
+}
+void updateLcd() {
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Estado: ");
+  lcd.print(currentState);
+  lcd.setCursor(0, 1);
+  lcd.print("Produtos: ");
+  lcd.print(productsFinished);
+}
+void updateLeds() {
+  digitalWrite(ledAmarelo, currentState == WAITING_FOR_STAGE_1);
+  digitalWrite(ledVerde, currentState == WAITING_FOR_STAGE_2);
+  digitalWrite(ledAzul, currentState == WAITING_FOR_STAGE_3);
+  digitalWrite(ledBranco, currentState == PROCESSING_STAGE_3);
+  digitalWrite(ledVermelho, currentState == FAULT || currentState == EMERGENCY_STOP);
+}
+void logEvent(String message) {
+  Serial.print("[");
+  Serial.print(millis());
+  Serial.print("] ");
+  Serial.println(message);
+}
